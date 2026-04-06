@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/checkin-app/static/css/main.7ddb145b.css",
+    "main.js": "/checkin-app/static/js/main.6a3769f5.js",
+    "index.html": "/checkin-app/index.html",
+    "main.7ddb145b.css.map": "/checkin-app/static/css/main.7ddb145b.css.map",
+    "main.6a3769f5.js.map": "/checkin-app/static/js/main.6a3769f5.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.7ddb145b.css",
+    "static/js/main.6a3769f5.js"
+  ]
+}
