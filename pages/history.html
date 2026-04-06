@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>History — CheckIn</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-logo"><a href="../index.html" style="color:inherit;">CheckIn<span class="dot">.</span></a></div>
+  <div class="nav-links">
+    <a href="../index.html">Dashboard</a>
+    <a href="checkin.html">Check In</a>
+    <a href="history.html" class="active">History</a>
+    <a href="settings.html">Settings</a>
+  </div>
+  <div class="nav-user" id="navUser"></div>
+</nav>
+
+<main class="container">
+
+  <div id="authGate" class="empty-state" style="padding:5rem 0;">
+    <div class="empty-state-icon">🔒</div>
+    <p>Please <a href="../index.html">sign in</a> to view your history.</p>
+  </div>
+
+  <div id="historyContent" class="hidden">
+    <div class="section-header" style="margin-bottom:1.5rem;">
+      <h1 style="font-family:'DM Serif Display',serif;font-size:2rem;">History</h1>
+      <div class="history-filters">
+        <button class="filter-btn active" onclick="setRange(30,this)">30 days</button>
+        <button class="filter-btn" onclick="setRange(90,this)">90 days</button>
+        <button class="filter-btn" onclick="setRange(365,this)">1 year</button>
+        <button class="filter-btn" onclick="setRange(0,this)">All time</button>
+      </div>
+    </div>
+
+    <!-- Trend chart -->
+    <div class="chart-card">
+      <h3>Overall Score Trend (avg of numeric answers)</h3>
+      <canvas id="trendChart" height="90"></canvas>
+    </div>
+
+    <!-- Per-question charts -->
+    <div id="perQuestionCharts"></div>
+
+    <!-- Table -->
+    <div class="section-header" style="margin-top:2rem;margin-bottom:1rem;">
+      <h2 class="section-title">All Entries</h2>
+    </div>
+    <div class="checkin-list" id="historyList"></div>
+
+  </div>
+</main>
+
+<!-- Detail Modal -->
+<div class="modal-overlay" id="detailModal">
+  <div class="modal" style="max-width:560px;">
+    <h2 class="modal-title" id="detailDate"></h2>
+    <div id="detailBody" style="margin-top:1rem;display:flex;flex-direction:column;gap:1rem;max-height:60vh;overflow-y:auto;"></div>
+    <button class="modal-close" onclick="closeDetail()">✕</button>
+  </div>
+</div>
+
+<script src="../js/supabase.js"></script>
+<script>
+let allCheckins = [];
+let questions = [];
+let trendChart = null;
+let perCharts = {};
+let rangedays = 30;
+
+(async () => {
+  const user = await getUser();
+  if (!user) { document.getElementById('authGate').style.display='block'; return; }
+  document.getElementById('navUser').innerHTML = `<button class="btn-ghost" onclick="signOut()">Sign Out</button>`;
+  document.getElementById('historyContent').classList.remove('hidden');
+
+  [allCheckins, questions] = await Promise.all([getCheckins(user.id, 500), getQuestions(user.id)]);
+  renderAll();
+})();
+
+function setRange(days, btn) {
+  rangedays = days;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderAll();
+}
+
+function filterCheckins() {
+  if (!rangedays) return allCheckins;
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - rangedays);
+  return allCheckins.filter(c => new Date(c.completed_at) >= cutoff);
+}
+
+function renderAll() {
+  const checkins = filterCheckins();
+  renderTrend(checkins);
+  renderPerQuestion(checkins);
+  renderList(checkins);
+}
+
+function renderTrend(checkins) {
+  const sorted = [...checkins].reverse();
+  const labels = sorted.map(c => new Date(c.completed_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}));
+  const scores = sorted.map(c => {
+    const nums = Object.values(c.answers).filter(a => typeof a === 'number');
+    return nums.length ? +(nums.reduce((s,n)=>s+n,0)/nums.length).toFixed(2) : null;
+  });
+
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart(document.getElementById('trendChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Avg Score',
+        data: scores,
+        borderColor: '#7c6af7',
+        backgroundColor: 'rgba(124,106,247,0.1)',
+        fill: true,
+        tension: .35,
+        pointRadius: 4,
+        pointBackgroundColor: '#7c6af7'
+      }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color:'#8b8fa8', maxTicksLimit: 12 }, grid: { color:'#2a2d38' } },
+        y: { min:0, max:10, ticks: { color:'#8b8fa8' }, grid: { color:'#2a2d38' } }
+      }
+    }
+  });
+}
+
+function renderPerQuestion(checkins) {
+  const sorted = [...checkins].reverse();
+  const container = document.getElementById('perQuestionCharts');
+
+  // Only scale questions
+  const scaleQs = questions.filter(q => q.type === 'scale');
+  if (!scaleQs.length) { container.innerHTML = ''; return; }
+
+  // destroy old
+  Object.values(perCharts).forEach(c => c.destroy());
+  perCharts = {};
+
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1.25rem;margin-bottom:1.25rem;';
+
+  scaleQs.forEach(q => {
+    const labels = sorted.map(c => new Date(c.completed_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}));
+    const data = sorted.map(c => c.answers[q.id] ?? null);
+
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+    card.innerHTML = `<h3>${q.text}</h3><canvas id="qchart-${q.id}" height="110"></canvas>`;
+    grid.appendChild(card);
+
+    setTimeout(() => {
+      perCharts[q.id] = new Chart(document.getElementById('qchart-' + q.id), {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            data,
+            backgroundColor: data.map(v => v === null ? 'transparent' : v >= 7 ? 'rgba(52,211,153,0.7)' : v >= 4 ? 'rgba(124,106,247,0.7)' : 'rgba(248,113,113,0.7)'),
+            borderRadius: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color:'#8b8fa8', maxTicksLimit:10 }, grid: { color:'#2a2d38' } },
+            y: { min:0, max:10, ticks: { color:'#8b8fa8' }, grid: { color:'#2a2d38' } }
+          }
+        }
+      });
+    }, 0);
+  });
+
+  container.innerHTML = '';
+  container.appendChild(grid);
+}
+
+function renderList(checkins) {
+  const list = document.getElementById('historyList');
+  if (!checkins.length) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📋</div><p>No check-ins in this time range.</p></div>';
+    return;
+  }
+  list.innerHTML = checkins.map(c => {
+    const date = new Date(c.completed_at).toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric',year:'numeric'});
+    const preview = questions.slice(0,2).map(q => {
+      const a = c.answers[q.id];
+      return a !== undefined ? `${q.text.slice(0,24)}…: <strong>${a}</strong>` : '';
+    }).filter(Boolean).join(' &nbsp;·&nbsp; ');
+    const nums = Object.values(c.answers).filter(a => typeof a === 'number');
+    const score = nums.length ? (nums.reduce((s,n)=>s+n,0)/nums.length).toFixed(1) : '—';
+    const scoreNum = parseFloat(score);
+    const cls = isNaN(scoreNum) ? '' : scoreNum >= 7 ? 'badge-green' : scoreNum >= 4 ? '' : 'badge-red';
+    return `<div class="checkin-item" style="cursor:pointer;" onclick="showDetail('${c.id}')">
+      <div class="ci-date">${date}</div>
+      <div class="ci-answers">${preview || 'Tap to view'}</div>
+      <div class="ci-score badge ${cls}">${score}/10</div>
+    </div>`;
+  }).join('');
+}
+
+function showDetail(id) {
+  const c = allCheckins.find(x => x.id === id);
+  if (!c) return;
+  document.getElementById('detailDate').textContent = new Date(c.completed_at).toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+  const body = questions.map(q => {
+    const a = c.answers[q.id];
+    if (a === undefined) return '';
+    return `<div style="background:var(--surface2);border-radius:8px;padding:1rem;">
+      <div style="font-size:.8rem;color:var(--muted);margin-bottom:.35rem;">${q.text}</div>
+      <div style="font-weight:600;font-size:1rem;">${a}${q.type==='scale' ? ' / 10' : ''}</div>
+    </div>`;
+  }).filter(Boolean).join('');
+  document.getElementById('detailBody').innerHTML = body;
+  document.getElementById('detailModal').classList.add('open');
+}
+function closeDetail() { document.getElementById('detailModal').classList.remove('open'); }
+</script>
+</body>
+</html>

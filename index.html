@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CheckIn — Personal Habit Tracker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-logo">CheckIn<span class="dot">.</span></div>
+  <div class="nav-links">
+    <a href="index.html" class="active">Dashboard</a>
+    <a href="pages/checkin.html">Check In</a>
+    <a href="pages/history.html">History</a>
+    <a href="pages/settings.html">Settings</a>
+  </div>
+  <div class="nav-user" id="navUser">
+    <button class="btn-ghost" onclick="showAuth()">Sign In</button>
+  </div>
+</nav>
+
+<!-- Auth Modal -->
+<div class="modal-overlay" id="authModal">
+  <div class="modal">
+    <h2 class="modal-title">Welcome back</h2>
+    <p class="modal-sub">Sign in to your CheckIn account</p>
+    <div class="form-group">
+      <label>Email</label>
+      <input type="email" id="authEmail" placeholder="you@example.com" />
+    </div>
+    <div class="form-group">
+      <label>Password</label>
+      <input type="password" id="authPassword" placeholder="••••••••" />
+    </div>
+    <div class="auth-actions">
+      <button class="btn-primary" onclick="signIn()">Sign In</button>
+      <button class="btn-ghost" onclick="signUp()">Create Account</button>
+    </div>
+    <p class="auth-note" id="authNote"></p>
+    <button class="modal-close" onclick="closeAuth()">✕</button>
+  </div>
+</div>
+
+<main class="container">
+
+  <!-- Not signed in -->
+  <section class="signin-prompt" id="signinPrompt">
+    <div class="prompt-inner">
+      <h1 class="prompt-title">Track how you're <em>really</em> doing.</h1>
+      <p class="prompt-body">Set up recurring check-in questions, get email reminders, and see your progress over time — all in one place.</p>
+      <button class="btn-primary" style="font-size:1rem;padding:.8rem 2rem;" onclick="showAuth()">Get Started →</button>
+    </div>
+  </section>
+
+  <!-- Dashboard (signed in) -->
+  <div id="dashboard" class="hidden">
+
+    <!-- Hero stats row -->
+    <section class="hero-row">
+      <div class="hero-card hero-streak">
+        <div class="streak-number" id="streakCount">0</div>
+        <div class="streak-label">Day Streak 🔥</div>
+        <div class="streak-sub" id="streakSub">Keep it going!</div>
+      </div>
+      <div class="hero-card hero-next">
+        <div class="next-label">Next Reminder</div>
+        <div class="next-time" id="nextReminder">—</div>
+        <a href="pages/checkin.html" class="btn-primary" style="margin-top:auto;" id="checkinBtn">Start Check-In →</a>
+      </div>
+      <div class="hero-card hero-total">
+        <div class="total-number" id="totalCount">0</div>
+        <div class="total-label">Total Check-Ins</div>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar" id="weekProgress" style="width:0%"></div>
+        </div>
+        <div class="total-sub" id="weekLabel">This week: 0</div>
+      </div>
+    </section>
+
+    <!-- Recent check-ins -->
+    <section>
+      <div class="section-header">
+        <h2 class="section-title">Recent Check-Ins</h2>
+        <a href="pages/history.html" class="btn-ghost" style="font-size:.85rem;">View All</a>
+      </div>
+      <div class="checkin-list" id="recentList">
+        <div class="empty-state">
+          <div class="empty-state-icon">📋</div>
+          <p>No check-ins yet. <a href="pages/settings.html">Set up your questions</a> to get started.</p>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<script src="js/supabase.js"></script>
+<script>
+(async () => {
+  const user = await getUser();
+  if (!user) {
+    document.getElementById('signinPrompt').classList.add('show');
+    return;
+  }
+
+  // Show user info
+  document.getElementById('navUser').innerHTML = `
+    <span style="font-size:.85rem;color:var(--muted);margin-right:.75rem;">${user.email}</span>
+    <button class="btn-ghost" onclick="signOut()">Sign Out</button>`;
+
+  document.getElementById('dashboard').classList.remove('hidden');
+
+  // Load data
+  const [checkins, settings] = await Promise.all([
+    getCheckins(user.id, 20),
+    getSettings(user.id)
+  ]);
+
+  // Streak
+  let streak = 0;
+  if (checkins.length) {
+    const dates = [...new Set(checkins.map(c => c.completed_at.split('T')[0]))].sort().reverse();
+    const today = new Date().toISOString().split('T')[0];
+    let check = today;
+    for (const d of dates) {
+      if (d === check) { streak++; const dt = new Date(check); dt.setDate(dt.getDate()-1); check = dt.toISOString().split('T')[0]; }
+      else break;
+    }
+  }
+  document.getElementById('streakCount').textContent = streak;
+  document.getElementById('streakSub').textContent = streak > 0 ? `${streak} day${streak>1?'s':''} in a row!` : 'Complete a check-in to start!';
+
+  // Total & week
+  document.getElementById('totalCount').textContent = checkins.length;
+  const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate()-7);
+  const weekCount = checkins.filter(c => new Date(c.completed_at) >= weekAgo).length;
+  const freq = settings?.frequency === 'daily' ? 7 : (settings?.frequency === 'weekly' ? 1 : 7);
+  document.getElementById('weekLabel').textContent = `This week: ${weekCount}`;
+  document.getElementById('weekProgress').style.width = Math.min(100, (weekCount/freq)*100) + '%';
+
+  // Next reminder
+  if (settings?.reminder_time) {
+    document.getElementById('nextReminder').textContent = settings.reminder_time;
+  }
+
+  // Today status
+  const todayDone = await getTodayCheckin(user.id);
+  if (todayDone) {
+    document.getElementById('checkinBtn').textContent = '✓ Done Today';
+    document.getElementById('checkinBtn').style.background = 'var(--green)';
+  }
+
+  // Recent list
+  if (checkins.length) {
+    const questions = await getQuestions(user.id);
+    const list = document.getElementById('recentList');
+    list.innerHTML = checkins.slice(0, 5).map(c => {
+      const date = new Date(c.completed_at).toLocaleDateString('en-US', {month:'short',day:'numeric',year:'numeric'});
+      const preview = questions.slice(0,2).map(q => {
+        const a = c.answers[q.id];
+        return a !== undefined ? `${q.text.slice(0,20)}…: ${a}` : '';
+      }).filter(Boolean).join(' · ');
+      // score = avg of numeric answers
+      const nums = Object.values(c.answers).filter(a => typeof a === 'number');
+      const score = nums.length ? (nums.reduce((s,n)=>s+n,0)/nums.length).toFixed(1) : '—';
+      return `<div class="checkin-item">
+        <div class="ci-date">${date}</div>
+        <div class="ci-answers">${preview || 'Check-in completed'}</div>
+        <div class="ci-score">${score}/10</div>
+      </div>`;
+    }).join('');
+  }
+})();
+</script>
+</body>
+</html>

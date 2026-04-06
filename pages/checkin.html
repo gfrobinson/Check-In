@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Check In — CheckIn</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-logo"><a href="../index.html" style="color:inherit;">CheckIn<span class="dot">.</span></a></div>
+  <div class="nav-links">
+    <a href="../index.html">Dashboard</a>
+    <a href="checkin.html" class="active">Check In</a>
+    <a href="history.html">History</a>
+    <a href="settings.html">Settings</a>
+  </div>
+  <div class="nav-user" id="navUser"></div>
+</nav>
+
+<main class="container">
+  <div class="checkin-page">
+
+    <div id="authGate" class="empty-state" style="padding:5rem 0;">
+      <div class="empty-state-icon">🔒</div>
+      <p>Please <a href="../index.html" onclick="event.preventDefault();showAuth()">sign in</a> to complete your check-in.</p>
+    </div>
+
+    <div id="alreadyDone" class="hidden" style="text-align:center;padding:4rem 0;">
+      <div style="font-size:3rem;margin-bottom:1rem;">✅</div>
+      <h2 style="font-family:'DM Serif Display',serif;font-size:1.8rem;">Already done today!</h2>
+      <p style="color:var(--muted);margin:1rem 0 2rem;">You've completed your check-in for today. Come back tomorrow.</p>
+      <a href="history.html" class="btn-ghost">View History</a>
+    </div>
+
+    <div id="noQuestions" class="hidden" style="text-align:center;padding:4rem 0;">
+      <div style="font-size:3rem;margin-bottom:1rem;">📝</div>
+      <h2 style="font-family:'DM Serif Display',serif;font-size:1.8rem;">No questions yet</h2>
+      <p style="color:var(--muted);margin:1rem 0 2rem;">Set up your check-in questions in Settings first.</p>
+      <a href="settings.html" class="btn-primary">Go to Settings →</a>
+    </div>
+
+    <div id="checkinForm" class="hidden">
+      <div class="checkin-header">
+        <h1>Today's Check-In</h1>
+        <p id="checkinDate" style="color:var(--muted);"></p>
+      </div>
+
+      <div id="questionsContainer"></div>
+
+      <div class="submit-bar">
+        <div class="submit-info">
+          <span id="answeredCount">0</span> of <span id="totalQuestions">0</span> answered
+        </div>
+        <button class="btn-primary" onclick="submitCheckin()">Save Check-In ✓</button>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script src="../js/supabase.js"></script>
+<script>
+let questions = [];
+let answers = {};
+let currentUser = null;
+
+(async () => {
+  const user = await getUser();
+  if (!user) { document.getElementById('authGate').style.display = 'block'; return; }
+  currentUser = user;
+
+  document.getElementById('navUser').innerHTML = `
+    <button class="btn-ghost" onclick="signOut()">Sign Out</button>`;
+
+  // Already done today?
+  const done = await getTodayCheckin(user.id);
+  if (done) {
+    document.getElementById('alreadyDone').classList.remove('hidden');
+    return;
+  }
+
+  questions = await getQuestions(user.id);
+  if (!questions.length) {
+    document.getElementById('noQuestions').classList.remove('hidden');
+    return;
+  }
+
+  document.getElementById('checkinForm').classList.remove('hidden');
+  document.getElementById('checkinDate').textContent = new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+  document.getElementById('totalQuestions').textContent = questions.length;
+  renderQuestions();
+})();
+
+function renderQuestions() {
+  const container = document.getElementById('questionsContainer');
+  container.innerHTML = questions.map((q, idx) => {
+    let widget = '';
+    if (q.type === 'scale') {
+      widget = `<div class="scale-widget">${
+        Array.from({length:10},(_,i)=>i+1).map(n =>
+          `<button class="scale-btn" onclick="setAnswer('${q.id}',${n},this,'scale-btn')">${n}</button>`
+        ).join('')
+      }</div><div style="display:flex;justify-content:space-between;margin-top:.4rem;font-size:.75rem;color:var(--muted)"><span>Low</span><span>High</span></div>`;
+    } else if (q.type === 'yesno') {
+      widget = `<div class="yn-widget">
+        <button class="yn-btn yes" onclick="setAnswer('${q.id}','Yes',this,'yn-btn yes')">Yes</button>
+        <button class="yn-btn no"  onclick="setAnswer('${q.id}','No',this,'yn-btn no')">No</button>
+      </div>`;
+    } else if (q.type === 'multiple_choice') {
+      const opts = q.options || [];
+      widget = `<div class="mc-widget">${opts.map(opt =>
+        `<button class="mc-btn" onclick="setAnswer('${q.id}','${opt}',this,'mc-btn')">${opt}</button>`
+      ).join('')}</div>`;
+    } else {
+      widget = `<textarea class="form-group" style="width:100%;margin:0;" placeholder="Your thoughts…" 
+        oninput="setTextAnswer('${q.id}',this.value)" rows="3"></textarea>`;
+    }
+    return `<div class="question-card" id="qcard-${q.id}">
+      <div class="q-label">Question ${idx+1}</div>
+      <div class="q-text">${q.text}</div>
+      ${widget}
+    </div>`;
+  }).join('');
+}
+
+function setAnswer(qid, value, btn, btnClass) {
+  answers[qid] = value;
+  // deselect siblings
+  const card = document.getElementById('qcard-' + qid);
+  card.querySelectorAll('.' + btnClass.split(' ')[0]).forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  updateProgress();
+}
+
+function setTextAnswer(qid, value) {
+  answers[qid] = value;
+  updateProgress();
+}
+
+function updateProgress() {
+  document.getElementById('answeredCount').textContent = Object.keys(answers).length;
+}
+
+async function submitCheckin() {
+  if (!currentUser) return;
+  const unanswered = questions.filter(q => answers[q.id] === undefined);
+  if (unanswered.length) {
+    // highlight unanswered
+    unanswered.forEach(q => {
+      const card = document.getElementById('qcard-' + q.id);
+      card.style.borderColor = 'var(--yellow)';
+    });
+    toast('Please answer all questions before saving.', 'error');
+    return;
+  }
+  try {
+    await saveCheckin(currentUser.id, answers);
+    toast('Check-in saved! Great job. 🎉');
+    setTimeout(() => { location.href = '../index.html'; }, 1500);
+  } catch(e) {
+    toast('Error saving: ' + e.message, 'error');
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Settings — CheckIn</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="nav-logo"><a href="../index.html" style="color:inherit;">CheckIn<span class="dot">.</span></a></div>
+  <div class="nav-links">
+    <a href="../index.html">Dashboard</a>
+    <a href="checkin.html">Check In</a>
+    <a href="history.html">History</a>
+    <a href="settings.html" class="active">Settings</a>
+  </div>
+  <div class="nav-user" id="navUser"></div>
+</nav>
+
+<main class="container">
+
+  <div id="authGate" class="empty-state" style="padding:5rem 0;">
+    <div class="empty-state-icon">🔒</div>
+    <p>Please <a href="../index.html">sign in</a> to manage settings.</p>
+  </div>
+
+  <div id="settingsContent" class="hidden">
+
+    <h1 style="font-family:'DM Serif Display',serif;font-size:2rem;margin-bottom:2rem;">Settings</h1>
+
+    <div class="settings-grid">
+
+      <!-- Questions panel -->
+      <div style="grid-column:1/-1;">
+        <div class="card">
+          <div class="card-title">Check-In Questions</div>
+          <p style="color:var(--muted);font-size:.9rem;margin-bottom:1.5rem;">These questions appear every time you do a check-in.</p>
+          <div class="question-builder" id="questionBuilder"></div>
+          <div style="display:flex;gap:.75rem;margin-top:1rem;flex-wrap:wrap;">
+            <button class="btn-ghost" onclick="addQuestion('scale')">+ Scale (1–10)</button>
+            <button class="btn-ghost" onclick="addQuestion('yesno')">+ Yes / No</button>
+            <button class="btn-ghost" onclick="addQuestion('multiple_choice')">+ Multiple Choice</button>
+            <button class="btn-ghost" onclick="addQuestion('text')">+ Free Text</button>
+          </div>
+          <div style="margin-top:1.5rem;padding-top:1.5rem;border-top:1px solid var(--border);">
+            <button class="btn-primary" onclick="saveAllQuestions()">Save Questions</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Reminder settings -->
+      <div>
+        <div class="card">
+          <div class="card-title">Reminder Schedule</div>
+          <div class="form-group">
+            <label>Frequency</label>
+            <select id="frequency">
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="custom">Custom days</option>
+            </select>
+          </div>
+          <div id="customDays" class="form-group hidden">
+            <label>Days of the week</label>
+            <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem;">
+              {Mon,Tue,Wed,Thu,Fri,Sat,Sun}.split(',').map(...)
+            </div>
+          </div>
+          <div id="weeklyDay" class="form-group hidden">
+            <label>Day of week</label>
+            <select id="weekday">
+              <option value="1">Monday</option><option value="2">Tuesday</option>
+              <option value="3">Wednesday</option><option value="4">Thursday</option>
+              <option value="5">Friday</option><option value="6">Saturday</option>
+              <option value="0">Sunday</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Reminder time</label>
+            <input type="time" id="reminderTime" value="08:00" />
+          </div>
+          <div class="form-group">
+            <label>Email address for reminders</label>
+            <input type="email" id="reminderEmail" placeholder="you@example.com" />
+          </div>
+          <button class="btn-primary" onclick="saveReminderSettings()">Save Reminders</button>
+        </div>
+      </div>
+
+      <!-- Account -->
+      <div>
+        <div class="card">
+          <div class="card-title">Account</div>
+          <p style="color:var(--muted);font-size:.9rem;margin-bottom:1.25rem;" id="accountEmail"></p>
+          <div class="form-group">
+            <label>New Password</label>
+            <input type="password" id="newPassword" placeholder="Leave blank to keep current" />
+          </div>
+          <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:.5rem;">
+            <button class="btn-ghost" onclick="updatePassword()">Update Password</button>
+            <button class="btn-danger" onclick="signOut()">Sign Out</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</main>
+
+<script src="../js/supabase.js"></script>
+<script>
+let currentUser = null;
+let localQuestions = [];
+
+// Day checkboxes
+const DAY_NAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const DAY_VALS  = [1,2,3,4,5,6,0];
+let selectedDays = new Set([1,2,3,4,5]);
+
+(async () => {
+  const user = await getUser();
+  if (!user) { document.getElementById('authGate').style.display='block'; return; }
+  currentUser = user;
+  document.getElementById('authGate').style.display='none';
+  document.getElementById('settingsContent').classList.remove('hidden');
+  document.getElementById('navUser').innerHTML = `<button class="btn-ghost" onclick="signOut()">Sign Out</button>`;
+  document.getElementById('accountEmail').textContent = user.email;
+  document.getElementById('reminderEmail').value = user.email;
+
+  // Build day checkboxes
+  buildDayPicker();
+
+  // Frequency toggle
+  document.getElementById('frequency').addEventListener('change', () => {
+    const v = document.getElementById('frequency').value;
+    document.getElementById('customDays').classList.toggle('hidden', v !== 'custom');
+    document.getElementById('weeklyDay').classList.toggle('hidden', v !== 'weekly');
+  });
+
+  const [qs, settings] = await Promise.all([getQuestions(user.id), getSettings(user.id)]);
+  localQuestions = qs.map(q => ({...q}));
+  renderQuestions();
+
+  if (settings) {
+    if (settings.frequency) {
+      document.getElementById('frequency').value = settings.frequency;
+      document.getElementById('frequency').dispatchEvent(new Event('change'));
+    }
+    if (settings.reminder_time) document.getElementById('reminderTime').value = settings.reminder_time;
+    if (settings.reminder_email) document.getElementById('reminderEmail').value = settings.reminder_email;
+    if (settings.weekday !== undefined) document.getElementById('weekday').value = settings.weekday;
+    if (settings.custom_days) { selectedDays = new Set(settings.custom_days); refreshDayPicker(); }
+  }
+})();
+
+function buildDayPicker() {
+  const wrap = document.getElementById('customDays');
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.4rem;';
+  DAY_NAMES.forEach((name, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'filter-btn' + (selectedDays.has(DAY_VALS[i]) ? ' active' : '');
+    btn.textContent = name;
+    btn.dataset.day = DAY_VALS[i];
+    btn.onclick = () => {
+      const d = parseInt(btn.dataset.day);
+      if (selectedDays.has(d)) selectedDays.delete(d); else selectedDays.add(d);
+      btn.classList.toggle('active', selectedDays.has(d));
+    };
+    row.appendChild(btn);
+  });
+  // Remove the placeholder text
+  wrap.querySelector('div')?.remove();
+  wrap.appendChild(row);
+}
+
+function refreshDayPicker() {
+  document.querySelectorAll('#customDays .filter-btn').forEach(btn => {
+    btn.classList.toggle('active', selectedDays.has(parseInt(btn.dataset.day)));
+  });
+}
+
+// ===== QUESTION BUILDER =====
+function genId() { return 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2,6); }
+
+function addQuestion(type) {
+  localQuestions.push({ id: genId(), type, text: '', options: type === 'multiple_choice' ? ['Option 1','Option 2'] : [] });
+  renderQuestions();
+}
+
+function removeQuestion(id) {
+  localQuestions = localQuestions.filter(q => q.id !== id);
+  renderQuestions();
+}
+
+function renderQuestions() {
+  const builder = document.getElementById('questionBuilder');
+  if (!localQuestions.length) {
+    builder.innerHTML = '<p style="color:var(--muted);font-size:.9rem;">No questions yet. Add one below.</p>';
+    return;
+  }
+  builder.innerHTML = localQuestions.map((q, i) => `
+    <div class="q-row" id="qrow-${q.id}">
+      <div class="q-row-fields">
+        <input type="text" placeholder="Question text…" value="${escHtml(q.text)}"
+          oninput="localQuestions[${i}].text = this.value" />
+        <select onchange="changeType('${q.id}', this.value)">
+          <option value="scale" ${q.type==='scale'?'selected':''}>Scale 1–10</option>
+          <option value="yesno" ${q.type==='yesno'?'selected':''}>Yes / No</option>
+          <option value="multiple_choice" ${q.type==='multiple_choice'?'selected':''}>Multiple Choice</option>
+          <option value="text" ${q.type==='text'?'selected':''}>Free Text</option>
+        </select>
+        ${q.type === 'multiple_choice' ? renderOptions(q, i) : ''}
+      </div>
+      <button class="btn-danger" style="align-self:flex-start;padding:.4rem .7rem;font-size:.8rem;" onclick="removeQuestion('${q.id}')">✕</button>
+    </div>
+  `).join('');
+}
+
+function renderOptions(q, qi) {
+  const chips = (q.options||[]).map((opt, oi) =>
+    `<span class="option-chip">${escHtml(opt)} <button onclick="removeOption('${q.id}',${oi})">×</button></span>`
+  ).join('');
+  return `<div>
+    <div class="options-row" id="opts-${q.id}">${chips}</div>
+    <div class="add-option-row">
+      <input type="text" placeholder="New option…" id="optinput-${q.id}" onkeydown="if(event.key==='Enter')addOption('${q.id}')" />
+      <button class="btn-ghost" style="padding:.45rem .8rem;font-size:.82rem;" onclick="addOption('${q.id}')">Add</button>
+    </div>
+  </div>`;
+}
+
+function addOption(qid) {
+  const input = document.getElementById('optinput-' + qid);
+  const val = input.value.trim();
+  if (!val) return;
+  const q = localQuestions.find(x => x.id === qid);
+  if (q) { q.options = q.options || []; q.options.push(val); renderQuestions(); }
+}
+
+function removeOption(qid, oi) {
+  const q = localQuestions.find(x => x.id === qid);
+  if (q) { q.options.splice(oi, 1); renderQuestions(); }
+}
+
+function changeType(qid, type) {
+  const q = localQuestions.find(x => x.id === qid);
+  if (q) { q.type = type; if (type === 'multiple_choice' && !q.options?.length) q.options = ['Option 1','Option 2']; renderQuestions(); }
+}
+
+async function saveAllQuestions() {
+  if (!currentUser) return;
+  // Validate
+  for (const q of localQuestions) {
+    if (!q.text.trim()) { toast('Please fill in all question texts.', 'error'); return; }
+  }
+  try {
+    await saveQuestions(currentUser.id, localQuestions);
+    toast('Questions saved! ✓');
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+// ===== REMINDERS =====
+async function saveReminderSettings() {
+  if (!currentUser) return;
+  const frequency = document.getElementById('frequency').value;
+  const reminder_time = document.getElementById('reminderTime').value;
+  const reminder_email = document.getElementById('reminderEmail').value.trim();
+  const weekday = parseInt(document.getElementById('weekday').value);
+  const custom_days = [...selectedDays];
+  try {
+    await saveSettings(currentUser.id, { frequency, reminder_time, reminder_email, weekday, custom_days });
+    toast('Reminder settings saved! ✓');
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+// ===== ACCOUNT =====
+async function updatePassword() {
+  const pw = document.getElementById('newPassword').value;
+  if (!pw || pw.length < 6) { toast('Password must be at least 6 characters.', 'error'); return; }
+  const { error } = await db.auth.updateUser({ password: pw });
+  if (error) toast(error.message, 'error');
+  else { toast('Password updated! ✓'); document.getElementById('newPassword').value = ''; }
+}
+
+function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+</script>
+</body>
+</html>
