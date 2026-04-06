@@ -24,12 +24,12 @@ import {
 } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey:            "YOUR_API_KEY",
-  authDomain:        "YOUR_PROJECT.firebaseapp.com",
-  projectId:         "YOUR_PROJECT_ID",
-  storageBucket:     "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId:             "YOUR_APP_ID"
+  apiKey: "AIzaSyChoGRORc-xAPgU8Yi2ahWHWHTog_MWi_U",
+  authDomain: "check-in-83cab.firebaseapp.com",
+  projectId: "check-in-83cab",
+  storageBucket: "check-in-83cab.firebasestorage.app",
+  messagingSenderId: "426999582840",
+  appId: "1:426999582840:web:62eec7a477c9874748dd8d"
 };
 
 const app = initializeApp(firebaseConfig);
