@@ -73,7 +73,7 @@ async function sendEmail(to) {
     body: JSON.stringify({
       from: ALERT_FROM_EMAIL,
       to: [to],
-      subject: '⏰ Time for your daily check-in',
+      subject: 'Time to check in',
       html: `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#0e0f14;color:#e8e9f0;max-width:520px;margin:0 auto;padding:2rem;">
         <div style="background:#16181f;border:1px solid #2a2d38;border-radius:12px;padding:2rem;">
           <h1 style="font-size:1.4rem;color:#a78bfa;margin-bottom:.5rem;">CheckIn.</h1>
