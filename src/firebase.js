@@ -1,7 +1,7 @@
 // src/firebase.js
 import { initializeApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, collection, addDoc, getDocs, query, orderBy, limit, where, Timestamp } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, addDoc, getDocs, query, orderBy, limit, where, Timestamp } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey:            "AIzaSyChoGRORc-xAPgU8Yi2ahWHWHTog_MWi_U",
@@ -12,50 +12,72 @@ const firebaseConfig = {
   appId:             "1:426999582840:web:62eec7a477c9874748dd8d"
 };
 
-const app      = initializeApp(firebaseConfig);
+const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db   = getFirestore(app);
 
 const googleProvider = new GoogleAuthProvider();
 
-// Auth
+// ── Auth ──────────────────────────────────────────────────────────────────────
 export const signUp           = (email, pw) => createUserWithEmailAndPassword(auth, email, pw);
 export const signIn           = (email, pw) => signInWithEmailAndPassword(auth, email, pw);
 export const signInWithGoogle = ()           => signInWithPopup(auth, googleProvider);
 export const logOut           = ()           => signOut(auth);
 export const onAuth           = (cb)         => onAuthStateChanged(auth, cb);
 
-// Questions
-export async function getQuestions(uid) {
-  const ref = doc(db, 'users', uid, 'settings', 'questions');
-  const snap = await getDoc(ref);
-  return snap.exists() ? snap.data().list || [] : [];
+// ── User profile (timezone, reminder email) ───────────────────────────────────
+export async function getUserProfile(uid) {
+  const snap = await getDoc(doc(db, 'users', uid, 'settings', 'profile'));
+  return snap.exists() ? snap.data() : { timezone: 'America/Anchorage', reminderEmail: '' };
 }
-export async function saveQuestions(uid, list) {
-  await setDoc(doc(db, 'users', uid, 'settings', 'questions'), { list });
-}
-
-// Settings
-export async function getSettings(uid) {
-  const snap = await getDoc(doc(db, 'users', uid, 'settings', 'reminders'));
-  return snap.exists() ? snap.data() : null;
-}
-export async function saveSettings(uid, data) {
-  await setDoc(doc(db, 'users', uid, 'settings', 'reminders'), data);
+export async function saveUserProfile(uid, data) {
+  await setDoc(doc(db, 'users', uid, 'settings', 'profile'), data);
 }
 
-// Check-ins
-export async function saveCheckin(uid, answers) {
-  await addDoc(collection(db, 'users', uid, 'checkins'), { answers, completedAt: Timestamp.now() });
+// ── Question Sets ─────────────────────────────────────────────────────────────
+// Each set: { id, name, frequency, weekday, customDays, reminderTime, questions[] }
+export async function getQuestionSets(uid) {
+  const snap = await getDocs(collection(db, 'users', uid, 'questionSets'));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
-export async function getCheckins(uid, limitCount = 100) {
-  const q = query(collection(db, 'users', uid, 'checkins'), orderBy('completedAt', 'desc'), limit(limitCount));
+export async function saveQuestionSet(uid, set) {
+  const { id, ...data } = set;
+  if (id) {
+    await setDoc(doc(db, 'users', uid, 'questionSets', id), data);
+    return id;
+  } else {
+    const ref = await addDoc(collection(db, 'users', uid, 'questionSets'), data);
+    return ref.id;
+  }
+}
+export async function deleteQuestionSet(uid, setId) {
+  await deleteDoc(doc(db, 'users', uid, 'questionSets', setId));
+}
+
+// ── Check-ins ─────────────────────────────────────────────────────────────────
+// Stored per question set: users/{uid}/checkins/{setId}/entries/{docId}
+export async function saveCheckin(uid, setId, answers) {
+  await addDoc(collection(db, 'users', uid, 'checkins', setId, 'entries'), {
+    answers,
+    completedAt: Timestamp.now()
+  });
+}
+export async function getCheckins(uid, setId, limitCount = 100) {
+  const q = query(
+    collection(db, 'users', uid, 'checkins', setId, 'entries'),
+    orderBy('completedAt', 'desc'),
+    limit(limitCount)
+  );
   const snap = await getDocs(q);
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
 }
-export async function getTodayCheckin(uid) {
-  const startOfDay = new Date(); startOfDay.setHours(0,0,0,0);
-  const q = query(collection(db, 'users', uid, 'checkins'), where('completedAt', '>=', Timestamp.fromDate(startOfDay)), limit(1));
+export async function getTodayCheckin(uid, setId) {
+  const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+  const q = query(
+    collection(db, 'users', uid, 'checkins', setId, 'entries'),
+    where('completedAt', '>=', Timestamp.fromDate(startOfDay)),
+    limit(1)
+  );
   const snap = await getDocs(q);
   return snap.empty ? null : snap.docs[0];
 }
