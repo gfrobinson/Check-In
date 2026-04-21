@@ -7,7 +7,8 @@ import {
   auth, onAuth, logOut,
   getUserProfile, saveUserProfile,
   getQuestionSets, saveQuestionSet, deleteQuestionSet,
-  saveCheckin, getCheckins, getTodayCheckin
+  saveCheckin, getCheckins, getTodayCheckin,
+  queueAccountabilityEmail
 } from './firebase';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Filler);
@@ -109,59 +110,6 @@ function freqLabel(set) {
   if (set.frequency==='monthly') return `Monthly · Day ${set.monthDay||1}`;
   if (set.frequency==='custom') return `Custom · ${(set.customDays||[]).map(d=>days[d]).join(', ')}`;
   return set.frequency;
-}
-
-// ── Accountability email helper ───────────────────────────────────────────────
-async function sendAccountabilityEmail({set, answers, resendKey, fromEmail, appUrl}) {
-  if (!resendKey || !set.accountabilityEmail) return;
-  const questions = set.questions || [];
-  const mode = set.accountabilityMode || 'summary';
-
-  const avgScore = () => {
-    const nums = questions.flatMap(q => {
-      const a = answers[q.id];
-      if (q.type==='scale' && typeof a==='number') return [a];
-      if (q.type==='yesno' && a!==undefined) return [a===(q.desiredAnswer||'Yes')?10:0];
-      return [];
-    });
-    return nums.length ? (nums.reduce((s,n)=>s+n,0)/nums.length).toFixed(1) : 'N/A';
-  };
-
-  let bodyHtml = '';
-  if (mode==='all') {
-    bodyHtml = questions.map(q => {
-      const a = answers[q.id];
-      if (a===undefined) return '';
-      return `<div style="margin-bottom:0.75rem;padding:0.75rem;background:#1e2028;border-radius:8px;">
-        <div style="font-size:0.78rem;color:#8b8fa8;margin-bottom:4px;">${q.text}</div>
-        <div style="font-weight:600;color:#e8e9f0;">${a}${q.type==='scale'?' / 10':''}</div>
-      </div>`;
-    }).join('');
-  } else {
-    bodyHtml = `<div style="text-align:center;padding:1.5rem 0;">
-      <div style="font-size:3rem;font-weight:700;color:#a78bfa;">${avgScore()}<span style="font-size:1.5rem;color:#8b8fa8;">/10</span></div>
-      <div style="color:#8b8fa8;margin-top:0.5rem;">Overall Score</div>
-    </div>`;
-  }
-
-  await fetch('https://api.resend.com/emails', {
-    method:'POST',
-    headers:{'Authorization':`Bearer ${resendKey}`,'Content-Type':'application/json'},
-    body: JSON.stringify({
-      from: fromEmail,
-      to: [set.accountabilityEmail],
-      subject: `📋 ${set.name} check-in completed`,
-      html: `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#0e0f14;color:#e8e9f0;max-width:520px;margin:0 auto;padding:2rem;">
-        <div style="background:#16181f;border:1px solid #2a2d38;border-radius:12px;padding:2rem;">
-          <h1 style="font-size:1.4rem;color:#a78bfa;margin-bottom:.25rem;">CheckIn.</h1>
-          <h2 style="font-weight:400;font-size:1.1rem;margin-bottom:1.5rem;color:#8b8fa8;">${set.name} — just completed</h2>
-          ${bodyHtml}
-          <hr style="border:none;border-top:1px solid #2a2d38;margin:1.5rem 0;"/>
-          <p style="font-size:.8rem;color:#8b8fa8;">Sent via <a href="${appUrl}" style="color:#7c6af7;">CheckIn</a>.</p>
-        </div>
-      </body></html>`
-    })
-  });
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -281,17 +229,18 @@ function CheckInView({user,activeSetId,setActiveSetId,toast}) {
     if (unanswered.length){toast('Please answer all questions.','error');return;}
     try {
       await saveCheckin(user.uid,currentSet.id,answers);
-      // Send accountability email if configured
-      if (currentSet.accountabilityEmail && profile) {
+      // Queue accountability email if configured
+      if (currentSet.accountabilityEmail) {
         try {
-          await sendAccountabilityEmail({
-            set: currentSet,
-            answers,
-            resendKey: currentSet._resendKey,
-            fromEmail: profile.alertFromEmail || 'check-in@gfrobinson.com',
-            appUrl: 'https://gfrobinson.github.io/Check-In'
+          await queueAccountabilityEmail(user.uid, {
+            setId: currentSet.id,
+            setName: currentSet.name,
+            partnerEmail: currentSet.accountabilityEmail,
+            mode: currentSet.accountabilityMode || 'summary',
+            questions: currentSet.questions || [],
+            answers
           });
-        } catch(e) { console.warn('Accountability email failed:', e); }
+        } catch(e) { console.warn('Failed to queue accountability email:', e); }
       }
       setSubmitted(true);
       toast(`${currentSet.name} saved! 🎉`);
