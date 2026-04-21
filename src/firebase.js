@@ -25,7 +25,7 @@ export const signInWithGoogle = ()           => signInWithPopup(auth, googleProv
 export const logOut           = ()           => signOut(auth);
 export const onAuth           = (cb)         => onAuthStateChanged(auth, cb);
 
-// ── User profile (timezone, reminder email) ───────────────────────────────────
+// ── User profile ──────────────────────────────────────────────────────────────
 export async function getUserProfile(uid) {
   const snap = await getDoc(doc(db, 'users', uid, 'settings', 'profile'));
   return snap.exists() ? snap.data() : { timezone: 'America/Anchorage', reminderEmail: '' };
@@ -35,7 +35,6 @@ export async function saveUserProfile(uid, data) {
 }
 
 // ── Question Sets ─────────────────────────────────────────────────────────────
-// Each set: { id, name, frequency, weekday, customDays, reminderTime, questions[] }
 export async function getQuestionSets(uid) {
   const snap = await getDocs(collection(db, 'users', uid, 'questionSets'));
   return snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -55,7 +54,6 @@ export async function deleteQuestionSet(uid, setId) {
 }
 
 // ── Check-ins ─────────────────────────────────────────────────────────────────
-// Stored per question set: users/{uid}/checkins/{setId}/entries/{docId}
 export async function saveCheckin(uid, setId, answers) {
   await addDoc(collection(db, 'users', uid, 'checkins', setId, 'entries'), {
     answers,
@@ -80,4 +78,20 @@ export async function getTodayCheckin(uid, setId) {
   );
   const snap = await getDocs(q);
   return snap.empty ? null : snap.docs[0];
+}
+
+// ── Pending accountability emails ─────────────────────────────────────────────
+// Written by the app after a check-in; read and cleared by GitHub Actions
+export async function queueAccountabilityEmail(uid, { setId, setName, partnerEmail, mode, questions, answers }) {
+  await addDoc(collection(db, 'pendingAccountabilityEmails'), {
+    uid,
+    setId,
+    setName,
+    partnerEmail,
+    mode,       // 'summary' | 'all'
+    questions,  // array — needed to render answers and labels
+    answers,
+    sent: false,
+    createdAt: Timestamp.now()
+  });
 }
