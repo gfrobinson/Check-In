@@ -82,11 +82,11 @@ async function sendEmail(to, setName) {
     body: JSON.stringify({
       from: ALERT_FROM_EMAIL,
       to: [to],
-      subject: `⏰ Time for your ${setName} check-in`,
+      subject: `⏰ Time for your check-in`,
       html: `<!DOCTYPE html><html><body style="font-family:sans-serif;background:#0e0f14;color:#e8e9f0;max-width:520px;margin:0 auto;padding:2rem;">
         <div style="background:#16181f;border:1px solid #2a2d38;border-radius:12px;padding:2rem;">
           <h1 style="font-size:1.4rem;color:#a78bfa;margin-bottom:.5rem;">CheckIn.</h1>
-          <h2 style="font-weight:400;font-size:1.2rem;margin-bottom:1rem;">Time for your ${setName} 📋</h2>
+          <h2 style="font-weight:400;font-size:1.2rem;margin-bottom:1rem;">Time for your check-in. 📋</h2>
           <p style="color:#8b8fa8;margin-bottom:1.5rem;">Take a moment to reflect and track your progress.</p>
           <a href="${APP_URL}" style="display:inline-block;background:#7c6af7;color:#fff;padding:.75rem 1.75rem;border-radius:10px;text-decoration:none;font-weight:600;">
             Start Check-In →
