@@ -4,12 +4,14 @@ import { Line, Bar } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Filler } from 'chart.js';
 import AuthModal from './AuthModal';
 import {
-  auth, onAuth, logOut,
+  auth, db, onAuth, logOut,
   getUserProfile, saveUserProfile,
   getQuestionSets, saveQuestionSet, deleteQuestionSet,
   saveCheckin, getCheckins, getTodayCheckin,
   queueAccountabilityEmail
 } from './firebase';
+import { collection, query, where, getDocs, limit } from 'firebase/firestore';
+import { Timestamp } from 'firebase/firestore';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip, Filler);
 
@@ -112,11 +114,36 @@ function freqLabel(set) {
   return set.frequency;
 }
 
+
+// ── Missed check-in helpers ───────────────────────────────────────────────────
+function getDueDatesInRange(set, days = 30) {
+  const dates = [];
+  const today = new Date(); today.setHours(0,0,0,0);
+  for (let i = 1; i <= days; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const dow  = d.getDay();
+    const date = d.getDate();
+    let due = false;
+    if (set.frequency === 'daily') due = true;
+    else if (set.frequency === 'weekly') due = parseInt(set.weekday) === dow;
+    else if (set.frequency === 'monthly') due = date === parseInt(set.monthDay || 1);
+    else if (set.frequency === 'custom') due = (set.customDays || []).includes(dow);
+    if (due) dates.push(new Date(d));
+  }
+  return dates; // most recent first
+}
+
+function formatDateKey(d) {
+  return d.toISOString().split('T')[0];
+}
+
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 function Dashboard({user,setView,setActiveSetId,toast}) {
   const [sets,setSets]       = useState([]);
   const [dueStatus,setDue]   = useState({});
   const [totalCounts,setTotals] = useState({});
+  const [missedSets,setMissed] = useState([]); // [{set, date}]
   const [loading,setLoading] = useState(true);
 
   useEffect(()=>{
@@ -131,6 +158,21 @@ function Dashboard({user,setView,setActiveSetId,toast}) {
         totals[s.id]=all.length;
       }));
       setDue(status);setTotals(totals);
+
+      // Find missed check-ins in past 30 days
+      const missed = [];
+      for (const s of qs) {
+        const dueDates = getDueDatesInRange(s, 30);
+        for (const d of dueDates) {
+          const dayStart = new Date(d); dayStart.setHours(0,0,0,0);
+          const dayEnd   = new Date(d); dayEnd.setHours(23,59,59,999);
+          const col = collection(db, 'users', user.uid, 'checkins', s.id, 'entries');
+          const q2 = query(col, where('completedAt', '>=', Timestamp.fromDate(dayStart)), where('completedAt', '<=', Timestamp.fromDate(dayEnd)), limit(1));
+          const snap2 = await getDocs(q2);
+          if (snap2.empty) missed.push({ set: s, date: d });
+        }
+      }
+      setMissed(missed.slice(0, 10)); // show up to 10 most recent
     }).finally(()=>setLoading(false));
   },[user]);
 
@@ -181,6 +223,29 @@ function Dashboard({user,setView,setActiveSetId,toast}) {
           ))}
         </div>
       </div>
+      {/* Missed check-ins */}
+      {missedSets.length > 0 && (
+        <div style={{marginBottom:'2rem'}}>
+          <h2 style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.4rem',marginBottom:'1rem',color:'#fbbf24'}}>⚠ Missed Check-Ins</h2>
+          <div style={{display:'flex',flexDirection:'column',gap:'0.75rem'}}>
+            {missedSets.map(({set,date},i) => (
+              <div key={i} style={{...S.surface,padding:'1.25rem 1.5rem',display:'flex',alignItems:'center',gap:'1rem',borderColor:'#3a3010'}}>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600}}>{set.name}</div>
+                  <div style={{fontSize:'0.82rem',color:'#fbbf24'}}>
+                    Due {date.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'})}
+                  </div>
+                </div>
+                <button style={{...S.btnGhost,borderColor:'#fbbf24',color:'#fbbf24'}}
+                  onClick={()=>{setActiveSetId(set.id);setView('Check In');}}>
+                  Complete Late →
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {sets.filter(s=>!isDueToday(s)).length>0 && (
         <div>
           <h2 style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.4rem',marginBottom:'1rem'}}>Other Question Sets</h2>
@@ -208,6 +273,8 @@ function CheckInView({user,activeSetId,setActiveSetId,toast}) {
   const [submitted,setSubmitted] = useState(false);
   const [loading,setLoading]     = useState(true);
   const [profile,setProfile]     = useState(null);
+  const [lateDate,setLateDate]   = useState(null); // Date object if completing a missed check-in
+  const [missedDates,setMissed]  = useState([]); // {set, date} pairs
 
   useEffect(()=>{
     if (!user){setLoading(false);return;}
@@ -215,6 +282,22 @@ function CheckInView({user,activeSetId,setActiveSetId,toast}) {
       const due=qs.filter(s=>isDueToday(s));
       setSets(due);
       setProfile(prof);
+
+      // Find missed check-ins in past 30 days
+      const missed = [];
+      for (const s of qs) {
+        const dueDates = getDueDatesInRange(s, 30);
+        for (const d of dueDates) {
+          const dayStart = new Date(d); dayStart.setHours(0,0,0,0);
+          const dayEnd   = new Date(d); dayEnd.setHours(23,59,59,999);
+          const col = collection(db, 'users', uid, 'checkins', s.id, 'entries');
+          const q2 = query(col, where('completedAt', '>=', Timestamp.fromDate(dayStart)), where('completedAt', '<=', Timestamp.fromDate(dayEnd)), limit(1));
+          const snap2 = await getDocs(q2);
+          if (snap2.empty) missed.push({ set: s, date: d });
+        }
+      }
+      setMissed(missed);
+
       if (activeSetId) {
         const s=qs.find(x=>x.id===activeSetId);
         if (s){setCurrent(s);const td=await getTodayCheckin(user.uid,s.id);setTodayDone(!!td);}
@@ -228,7 +311,8 @@ function CheckInView({user,activeSetId,setActiveSetId,toast}) {
     const unanswered=(currentSet.questions||[]).filter(q=>answers[q.id]===undefined);
     if (unanswered.length){toast('Please answer all questions.','error');return;}
     try {
-      await saveCheckin(user.uid,currentSet.id,answers);
+      const completedAt = lateDate || new Date();
+      await saveCheckin(user.uid, currentSet.id, answers, completedAt, lateDate ? new Date() : null);
       // Queue accountability email if configured
       if (currentSet.accountabilityEmail) {
         try {
@@ -262,10 +346,33 @@ function CheckInView({user,activeSetId,setActiveSetId,toast}) {
                 <div style={{fontWeight:600}}>{s.name}</div>
                 <div style={{fontSize:'0.82rem',color:'#8b8fa8'}}>{s.questions?.length||0} questions</div>
               </div>
-              <button style={S.btnPrimary} onClick={()=>{setActiveSetId(s.id);setCurrent(s);}}>Start →</button>
+              <button style={S.btnPrimary} onClick={()=>{setActiveSetId(s.id);setCurrent(s);setLateDate(null);}}>Start →</button>
             </div>
           ))
       }
+
+      {/* Missed check-ins */}
+      {missedDates.length > 0 && (
+        <div style={{marginTop:'2rem'}}>
+          <h2 style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.3rem',marginBottom:'1rem',color:'#fbbf24'}}>⚠ Missed Check-Ins</h2>
+          <div style={{display:'flex',flexDirection:'column',gap:'0.75rem'}}>
+            {missedDates.map(({set,date},i) => (
+              <div key={i} style={{...S.surface,padding:'1.25rem 1.5rem',display:'flex',alignItems:'center',gap:'1rem',borderColor:'#3a3010'}}>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600}}>{set.name}</div>
+                  <div style={{fontSize:'0.82rem',color:'#fbbf24'}}>
+                    Due {date.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'})}
+                  </div>
+                </div>
+                <button style={{...S.btnGhost,borderColor:'#fbbf24',color:'#fbbf24'}}
+                  onClick={()=>{setActiveSetId(set.id);setCurrent(set);setLateDate(date);}}>
+                  Complete Late →
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -282,9 +389,14 @@ function CheckInView({user,activeSetId,setActiveSetId,toast}) {
 
   return (
     <div style={{maxWidth:680,margin:'0 auto',padding:'2rem 1.5rem'}}>
-      <button style={{...S.btnGhost,marginBottom:'1.5rem',fontSize:'0.82rem'}} onClick={()=>{setCurrent(null);setActiveSetId(null);}}>← Back</button>
+      <button style={{...S.btnGhost,marginBottom:'1.5rem',fontSize:'0.82rem'}} onClick={()=>{setCurrent(null);setActiveSetId(null);setLateDate(null);}}>← Back</button>
       <h1 style={{fontFamily:"'DM Serif Display',serif",fontSize:'2rem',marginBottom:'0.25rem'}}>{currentSet.name}</h1>
-      <p style={{color:'#8b8fa8',marginBottom:'2rem'}}>{new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</p>
+      {lateDate
+        ? <div style={{background:'rgba(251,191,36,0.1)',border:'1px solid #fbbf24',borderRadius:8,padding:'0.6rem 1rem',marginBottom:'2rem',fontSize:'0.88rem',color:'#fbbf24'}}>
+            Completing late for {lateDate.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}
+          </div>
+        : <p style={{color:'#8b8fa8',marginBottom:'2rem'}}>{new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}</p>
+      }
 
       {(currentSet.questions||[]).map((q,i)=>(
         <div key={q.id} style={{...S.surface,padding:'1.75rem',marginBottom:'1.25rem'}}>
@@ -459,7 +571,10 @@ function HistoryView({user,activeSetId,setActiveSetId}) {
               return (
                 <div key={c.id} onClick={()=>setSelected(selected?.id===c.id?null:c)}
                   style={{...S.surface,padding:'1rem 1.25rem',display:'flex',alignItems:'center',gap:'1rem',marginBottom:'0.75rem',cursor:'pointer',borderColor:selected?.id===c.id?'#7c6af7':'#2a2d38'}}>
-                  <div style={{fontSize:'0.8rem',color:'#8b8fa8',minWidth:120}}>{date}</div>
+                  <div style={{minWidth:120}}>
+                    <div style={{fontSize:'0.8rem',color:'#8b8fa8'}}>{date}</div>
+                    {c.enteredAt && <div style={{fontSize:'0.72rem',color:'#fbbf24',marginTop:2}}>entered {c.enteredAt.toDate().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>}
+                  </div>
                   <div style={{flex:1,fontSize:'0.88rem',color:'#8b8fa8'}}>{Object.keys(c.answers||{}).length} answers</div>
                   <div style={{background:'#1e2028',borderRadius:6,padding:'0.22rem 0.6rem',fontSize:'0.8rem',fontWeight:600,color:col}}>{score}/10</div>
                 </div>
@@ -470,6 +585,7 @@ function HistoryView({user,activeSetId,setActiveSetId}) {
           <div style={{...S.surface,padding:'1.5rem',marginTop:'1rem'}}>
             <div style={{fontFamily:"'DM Serif Display',serif",fontSize:'1.1rem',marginBottom:'1rem'}}>
               {selected.completedAt?.toDate().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}
+            {selected.enteredAt && <div style={{fontSize:'0.82rem',color:'#fbbf24',marginTop:4}}>entered on {selected.enteredAt.toDate().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>}
             </div>
             <div style={{display:'flex',flexDirection:'column',gap:'0.75rem'}}>
               {(currentSet.questions||[]).map(q=>{
