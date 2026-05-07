@@ -54,11 +54,13 @@ export async function deleteQuestionSet(uid, setId) {
 }
 
 // ── Check-ins ─────────────────────────────────────────────────────────────────
-export async function saveCheckin(uid, setId, answers) {
-  await addDoc(collection(db, 'users', uid, 'checkins', setId, 'entries'), {
+export async function saveCheckin(uid, setId, answers, completedAt = null, enteredAt = null) {
+  const data = {
     answers,
-    completedAt: Timestamp.now()
-  });
+    completedAt: completedAt ? Timestamp.fromDate(completedAt) : Timestamp.now()
+  };
+  if (enteredAt) data.enteredAt = Timestamp.fromDate(enteredAt);
+  await addDoc(collection(db, 'users', uid, 'checkins', setId, 'entries'), data);
 }
 export async function getCheckins(uid, setId, limitCount = 100) {
   const q = query(
