@@ -139,7 +139,7 @@ function formatDateKey(d) {
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
-function Dashboard({user,setView,setActiveSetId,toast}) {
+function Dashboard({user,setView,setActiveSetId,setActiveLateDate,toast}) {
   const [sets,setSets]       = useState([]);
   const [dueStatus,setDue]   = useState({});
   const [totalCounts,setTotals] = useState({});
@@ -237,7 +237,7 @@ function Dashboard({user,setView,setActiveSetId,toast}) {
                   </div>
                 </div>
                 <button style={{...S.btnGhost,borderColor:'#fbbf24',color:'#fbbf24'}}
-                  onClick={()=>{setActiveSetId(set.id);setView('Check In');}}>
+                  onClick={()=>{setActiveSetId(set.id);setActiveLateDate(date);setView('Check In');}}>
                   Complete Late →
                 </button>
               </div>
@@ -265,7 +265,7 @@ function Dashboard({user,setView,setActiveSetId,toast}) {
 }
 
 // ── Check-In View ─────────────────────────────────────────────────────────────
-function CheckInView({user,activeSetId,setActiveSetId,toast}) {
+function CheckInView({user,activeSetId,setActiveSetId,activeLateDate,setActiveLateDate,toast}) {
   const [sets,setSets]           = useState([]);
   const [currentSet,setCurrent]  = useState(null);
   const [answers,setAnswers]     = useState({});
@@ -273,7 +273,7 @@ function CheckInView({user,activeSetId,setActiveSetId,toast}) {
   const [submitted,setSubmitted] = useState(false);
   const [loading,setLoading]     = useState(true);
   const [profile,setProfile]     = useState(null);
-  const [lateDate,setLateDate]   = useState(null); // Date object if completing a missed check-in
+  const [lateDate,setLateDate]   = useState(activeLateDate || null); // Date object if completing a missed check-in
   const [missedDates,setMissed]  = useState([]); // {set, date} pairs
 
   useEffect(()=>{
@@ -300,7 +300,21 @@ function CheckInView({user,activeSetId,setActiveSetId,toast}) {
 
       if (activeSetId) {
         const s=qs.find(x=>x.id===activeSetId);
-        if (s){setCurrent(s);const td=await getTodayCheckin(user.uid,s.id);setTodayDone(!!td);}
+        if (s){
+          setCurrent(s);
+          // For late check-ins, check if that specific date was already done
+          if (activeLateDate) {
+            const dayStart = new Date(activeLateDate); dayStart.setHours(0,0,0,0);
+            const dayEnd   = new Date(activeLateDate); dayEnd.setHours(23,59,59,999);
+            const col = collection(db, 'users', user.uid, 'checkins', s.id, 'entries');
+            const q2 = query(col, where('completedAt', '>=', Timestamp.fromDate(dayStart)), where('completedAt', '<=', Timestamp.fromDate(dayEnd)), limit(1));
+            const snap2 = await getDocs(q2);
+            setTodayDone(!snap2.empty);
+          } else {
+            const td=await getTodayCheckin(user.uid,s.id);
+            setTodayDone(!!td);
+          }
+        }
       }
     }).finally(()=>setLoading(false));
   },[user,activeSetId]);
@@ -389,7 +403,7 @@ function CheckInView({user,activeSetId,setActiveSetId,toast}) {
 
   return (
     <div style={{maxWidth:680,margin:'0 auto',padding:'2rem 1.5rem'}}>
-      <button style={{...S.btnGhost,marginBottom:'1.5rem',fontSize:'0.82rem'}} onClick={()=>{setCurrent(null);setActiveSetId(null);setLateDate(null);}}>← Back</button>
+      <button style={{...S.btnGhost,marginBottom:'1.5rem',fontSize:'0.82rem'}} onClick={()=>{setCurrent(null);setActiveSetId(null);setLateDate(null);if(setActiveLateDate)setActiveLateDate(null);}}>← Back</button>
       <h1 style={{fontFamily:"'DM Serif Display',serif",fontSize:'2rem',marginBottom:'0.25rem'}}>{currentSet.name}</h1>
       {lateDate
         ? <div style={{background:'rgba(251,191,36,0.1)',border:'1px solid #fbbf24',borderRadius:8,padding:'0.6rem 1rem',marginBottom:'2rem',fontSize:'0.88rem',color:'#fbbf24'}}>
@@ -862,6 +876,7 @@ export default function App() {
   const [view,setView]           = useState('Dashboard');
   const [showAuth,setShowAuth]   = useState(false);
   const [activeSetId,setActiveSetId] = useState(null);
+  const [activeLateDate,setActiveLateDate] = useState(null);
   const {toasts,toast}           = useToast();
 
   useEffect(()=>{return onAuth(u=>setUser(u));},[]);
@@ -878,8 +893,8 @@ export default function App() {
         select option{background:#1e2028;}
       `}</style>
       <Navbar view={view} setView={setView} user={user} showAuth={()=>setShowAuth(true)}/>
-      {view==='Dashboard' && <Dashboard user={user} setView={setView} setActiveSetId={setActiveSetId} toast={toast}/>}
-      {view==='Check In'  && <CheckInView user={user} activeSetId={activeSetId} setActiveSetId={setActiveSetId} toast={toast}/>}
+      {view==='Dashboard' && <Dashboard user={user} setView={setView} setActiveSetId={setActiveSetId} setActiveLateDate={setActiveLateDate} toast={toast}/>}
+      {view==='Check In'  && <CheckInView user={user} activeSetId={activeSetId} setActiveSetId={setActiveSetId} activeLateDate={activeLateDate} setActiveLateDate={setActiveLateDate} toast={toast}/>}
       {view==='History'   && <HistoryView user={user} activeSetId={activeSetId} setActiveSetId={setActiveSetId}/>}
       {view==='Settings'  && <SettingsView user={user} toast={toast}/>}
       {showAuth && <AuthModal onClose={()=>setShowAuth(false)}/>}
